@@ -1,6 +1,6 @@
 # Table of contents
 
-* [Kubernetes](README.md)
+* [About](README.md)
 
 ## Angular
 
