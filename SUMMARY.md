@@ -1,5 +1,8 @@
 # Table of contents
 
 * [Kubernetes](README.md)
-* [Test](test.md)
+
+## Angular
+
+* [Getting Started](angular/getting-started.md)
 
