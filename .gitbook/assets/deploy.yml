@@ -1,0 +1,239 @@
+#!/usr/bin/env ansible-playbook
+- hosts: localhost
+  gather_facts: no
+  tasks:
+  - block:
+    - name: Install PyVmomi Module for Python
+      pip:
+        name: PyVmomi
+        executable: pip3
+    - set_fact:
+        working_dir: /data/ansible
+        ks: |
+          accepteula
+          rootpw ${ansible_password}
+          install --firstdisk=local  --overwritevmfs
+          network --bootproto=static --device=vmnic0 --ip=${ansible_host}  --gateway=${gateway} --nameserver=${dns} --netmask=255.255.255.0 --hostname=${fqdn| default(hostName)} --vlanid=${vlan}
+          reboot
+
+          %firstboot --interpreter=busybox
+          vim-cmd hostsvc/enable_ssh
+          vim-cmd hostsvc/start_ssh
+          vim-cmd hostsvc/enable_esx_shell
+          vim-cmd hostsvc/start_esx_shell
+          esxcli system settings advanced set -o /UserVars/SuppressShellWarning -i 1
+          esxcli network ip set --ipv6-enabled=0
+          esxcli network vswitch standard portgroup set --portgroup-name "VM Network" --vlan-id=${vlan}
+
+          esxcli network vswitch standard uplink add --uplink-name=vmnic0 --vswitch-name=vSwitch0
+          esxcli network vswitch standard uplink remove --uplink-name=vmnic1 --vswitch-name=vSwitch0
+          esxcli network vswitch standard uplink remove --uplink-name=vmnic2 --vswitch-name=vSwitch0
+          esxcli network vswitch standard uplink remove --uplink-name=vmnic3 --vswitch-name=vSwitch0 
+
+          esxcli storage nmp satp rule add -s VMW_SATP_LOCAL -d mpx.vmhba0:C0:T6:L0 -o enable_ssd
+          esxcli storage nmp satp rule add -s VMW_SATP_LOCAL -d mpx.vmhba0:C0:T5:L0 -o enable_ssd
+          esxcli storage nmp satp rule add -s VMW_SATP_LOCAL -d mpx.vmhba0:C0:T4:L0 -o enable_ssd
+          esxcli storage nmp satp rule add -s VMW_SATP_LOCAL -d mpx.vmhba0:C0:T3:L0 -o enable_ssd
+          esxcli storage nmp satp rule add -s VMW_SATP_LOCAL -d mpx.vmhba0:C0:T2:L0 -o enable_ssd
+          esxcli storage nmp satp rule add -s VMW_SATP_LOCAL -d mpx.vmhba0:C0:T1:L0 -o enable_ssd
+          esxcli storage core claiming reclaim -d mpx.vmhba0:C0:T1:L0
+          esxcli storage core claiming reclaim -d mpx.vmhba0:C0:T2:L0
+          esxcli storage core claiming reclaim -d mpx.vmhba0:C0:T3:L0
+          esxcli storage core claiming reclaim -d mpx.vmhba0:C0:T4:L0
+          esxcli storage core claiming reclaim -d mpx.vmhba0:C0:T5:L0
+          esxcli storage core claiming reclaim -d mpx.vmhba0:C0:T6:L0
+          esxcli storage core device list | grep SSD
+
+          cat > /etc/ntp.conf << __NTP_CONFIG__
+          restrict default kod nomodify notrap noquerynopeer
+          restrict 127.0.0.1
+          server time.vmware.com iburst
+
+          __NTP_CONFIG__
+          /sbin/chkconfig ntpd on
+
+          reboot
+
+    - debug:
+        var: ks
+        verbosity: 4
+
+    - file:
+        path: '{{ working_dir }}/tmp{{ tower_job_id | default() }}'
+        state: absent
+
+    - file:
+        path: '{{ working_dir }}/tmp{{ tower_job_id | default() }}'
+        state: directory
+
+    - local_action: copy content='{{ ks }}' dest='{{ working_dir }}/tmp{{ tower_job_id | default() }}/ks.cfg.j2'
+
+    - name: Install xorriso package if not already installed
+      package:
+        name:
+        - xorriso
+        state: present
+      ignore_errors: true
+
+    - raw: xorriso --version || yum install xorriso -y || brew install xorriso || apt install xorriso -y
+
+    - set_fact:
+        esxiIsoPath: '{{ esxiIsoPath | default("http://build-squid.eng.vmware.com/build/mts/release/bora-14708458/publish/vcps-sddc-bundle/esx/VMware-VMvisor-Installer-6.7.0.update03-14320388.x86_64.iso") }}'
+    
+    - name: Download esx iso
+      get_url:
+        url: '{{ esxiIsoPath }}'
+        force: no
+        dest: '{{ working_dir }}/tmp{{ tower_job_id | default() }}/{{ esxiIsoPath | basename }}'
+    
+    - name: Extract iso
+      shell: 'xorriso -osirrox on -ecma119_map lowercase -indev {{ working_dir }}/tmp{{ tower_job_id | default() }}/{{ esxiIsoPath | basename }} -extract / {{ working_dir }}/tmp{{ tower_job_id | default() }}/esxi_extract'
+    delegate_to: localhost
+    run_once: true
+
+- hosts: nested_esx
+  gather_facts: no
+  strategy: free
+  tasks:
+  - set_fact:
+      working_dir: /data/ansible
+
+  - template:
+      src: '{{ working_dir }}/tmp{{ tower_job_id | default() }}/ks.cfg.j2'
+      dest: '{{ working_dir }}/tmp{{ tower_job_id | default() }}/ks{{ groups["nested_esx"].index(inventory_hostname) }}.cfg'
+      variable_end_string: '}'
+      variable_start_string: '${'
+    delegate_to: localhost
+
+  - name: Generate iso's
+    shell: |
+        cp -aR {{ working_dir }}/tmp{{ tower_job_id | default() }}/esxi_extract {{ working_dir }}/tmp{{ tower_job_id | default() }}/cust_esx_bundle_{{ groups["nested_esx"].index(inventory_hostname) }}
+        cp {{ working_dir }}/tmp{{ tower_job_id | default() }}/ks{{ groups["nested_esx"].index(inventory_hostname) }}.cfg {{ working_dir }}/tmp{{ tower_job_id | default() }}/cust_esx_bundle_{{ groups["nested_esx"].index(inventory_hostname) }}/ks.cfg
+        sed -i "s/ks=cdrom:\/KS.CFG//g" {{ working_dir }}/tmp{{ tower_job_id | default() }}/cust_esx_bundle_{{ groups["nested_esx"].index(inventory_hostname) }}/boot.cfg
+        sed -i "s/kernelopt=.*/& ks=cdrom:\/KS.CFG/g" {{ working_dir }}/tmp{{ tower_job_id | default() }}/cust_esx_bundle_{{ groups["nested_esx"].index(inventory_hostname) }}/boot.cfg
+        xorriso -as mkisofs -relaxed-filenames -J -R -o {{ working_dir }}/tmp{{ tower_job_id | default() }}/{{inventory_hostname}}_{{ansible_host}}.iso  -b isolinux.bin -c boot.cat -no-emul-boot -boot-load-size 4 -boot-info-table -eltorito-alt-boot --efi-boot efiboot.img -no-emul-boot {{ working_dir }}/tmp{{ tower_job_id | default() }}/cust_esx_bundle_{{ groups["nested_esx"].index(inventory_hostname) }}
+    delegate_to: localhost
+    register: generate_iso
+    async: 600
+    poll: 0
+
+  - raw: 'ssh-keygen -R {{ ansible_host }}'
+    delegate_to: localhost
+
+  - name: Delete a vm before deploying
+    vmware_guest:
+      hostname: '{{ hostvars[groups.base_esxi | first ].ansible_host | default(hostvars[groups.base_esxi | first ]) }}'
+      username: '{{ hostvars[groups.base_esxi | first ].ansible_user }}'
+      password: '{{ hostvars[groups.base_esxi | first ].ansible_password }}'
+      validate_certs: no
+      name: '{{ inventory_hostname }}'
+      state: absent
+      force: '{{ force | default("true") }}'
+    delegate_to: localhost
+
+  - name: Wait for Iso generation to finish
+    async_status:
+      jid: '{{ generate_iso.ansible_job_id }}'
+    register: generate_iso_jobs
+    delegate_to: localhost
+    until: generate_iso_jobs.finished
+    delay: 5
+    retries: 100
+
+  - name: Copy file to datastore '{{ hostvars[groups.base_esxi | first ].iso_ds | default(hostvars[groups.base_esxi | first ].datastore) }}'
+    vsphere_copy:
+      hostname: '{{ hostvars[groups.base_esxi | first ].ansible_host | default(hostvars[groups.base_esxi | first ]) }}'
+      username: '{{ hostvars[groups.base_esxi | first ].ansible_user }}'
+      password: '{{ hostvars[groups.base_esxi | first ].ansible_password }}'
+      src: '{{ working_dir }}/tmp{{ tower_job_id | default() }}/{{inventory_hostname}}_{{ansible_host}}.iso'
+      datacenter: ha-datacenter
+      datastore: '{{ hostvars[groups.base_esxi | first ].iso_ds | default(hostvars[groups.base_esxi | first ].datastore) }}'
+      path: 'tmp/{{inventory_hostname}}_{{ansible_host}}.iso'
+      validate_certs: no
+    delegate_to: localhost
+    throttle: 3
+    retries: 10
+    delay: 20
+    register: copy_iso
+    until: copy_iso.failed == false
+
+# - name: Deploy ssh keys to router
+#   import_playbook: ../vcps/router/deploy_keys_to_router.yml
+#   ignore_errors: true
+#   ignore_unreachable: true
+
+- hosts: nested_esx
+  gather_facts: no
+  strategy: free
+  tasks:
+  - set_fact:
+      working_dir: /data/ansible
+  
+  - name: cleanup
+    file:
+      path: '{{ working_dir }}/tmp{{ tower_job_id | default() }}/'
+      state: absent
+    async: 100
+    poll: 0
+    run_once: true
+    delegate_to: localhost
+
+  - set_fact:
+      esx_networks: '{{ esx_networks | default([])+ [{"name": item, "device_type": "vmxnet3"}] }}'
+    loop: '{{ networks }}'
+
+  - name: Create a virtual machine from an iso
+    vmware_guest:
+      hostname: '{{ hostvars[groups.base_esxi | first ].ansible_host | default(hostvars[groups.base_esxi | first ]) }}'
+      username: '{{ hostvars[groups.base_esxi | first ].ansible_user }}'
+      password: '{{ hostvars[groups.base_esxi | first ].ansible_password }}'
+      validate_certs: no
+      name: '{{ inventory_hostname }}'
+      state: poweredon
+      guest_id: vmkernel65Guest
+      disk:
+      - size_gb: 20
+        type: thin
+        datastore: '{{ hostvars[groups.base_esxi | first ].datastore }}'
+      - size_gb: 80
+        type: thin
+        datastore: '{{ hostvars[groups.base_esxi | first ].datastore }}'
+      - size_gb: 80
+        type: thin
+        datastore: '{{ hostvars[groups.base_esxi | first ].datastore }}'
+      - size_gb: 400
+        type: thin
+        datastore: '{{ hostvars[groups.base_esxi | first ].datastore }}'
+      - size_gb: 400
+        type: thin
+        datastore: '{{ hostvars[groups.base_esxi | first ].datastore }}'
+      - size_gb: 400
+        type: thin
+        datastore: '{{ hostvars[groups.base_esxi | first ].datastore }}'
+      - size_gb: 400
+        type: thin
+        datastore: '{{ hostvars[groups.base_esxi | first ].datastore }}'
+      hardware:
+        memory_mb: 131072
+        num_cpus: 16
+        num_cpu_cores_per_socket: 1
+        scsi: paravirtual
+        max_connections: 5
+        hotadd_cpu: False
+        hotremove_cpu: False
+        hotadd_memory: False
+        version: 14
+        boot_firmware: "bios"
+        nested_virt: true
+      folder: ha-datacenter/vm
+      cdrom:
+        type: iso
+        iso_path: '[{{ hostvars[groups.base_esxi | first ].iso_ds | default(hostvars[groups.base_esxi | first ].datastore) }}] tmp/{{inventory_hostname}}_{{ansible_host}}.iso'
+      networks: '{{ esx_networks }}'
+      wait_for_ip_address: no
+    delegate_to: localhost
+
+  - name: Wait 10 min for server to be up
+    wait_for_connection:
+      sleep: 5
+      timeout: 600
