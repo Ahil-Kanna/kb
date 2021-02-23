@@ -6,7 +6,7 @@ description: Doc to deploy nested ESX using ansible
 
 * Download `deploy.yml` and update `input_spec.yml`
 
-{% file src="../.gitbook/assets/deploy.yml" caption="deploy.yml" %}
+{% file src="../.gitbook/assets/deploy.yml" %}
 
 {% code title="input\_spec.yml" %}
 ```yaml
@@ -63,16 +63,16 @@ all:
 {% tabs %}
 {% tab title="centos-py2" %}
 ```bash
-yum install python-pip -y
-pip install ansible
+yum install python-pip xorriso -y
+pip install ansible PyVmomi
 ansible-playbook -i input_spec.yml deploy.yml
 ```
 {% endtab %}
 
 {% tab title="centos-py3" %}
 ```
-yum install python3-pip -y
-pip3 install ansible
+yum install python3-pip xorriso -y
+pip3 install ansible PyVmomi 
 ansible-playbook -i input_spec.yml deploy.yml
 ```
 {% endtab %}

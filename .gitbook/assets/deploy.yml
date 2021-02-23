@@ -3,10 +3,10 @@
   gather_facts: no
   tasks:
   - block:
-    - name: Install PyVmomi Module for Python
-      pip:
-        name: PyVmomi
-        executable: pip3
+    # - name: Install PyVmomi Module for Python
+    #   pip:
+    #     name: PyVmomi
+    #     executable: pip3
     - set_fact:
         working_dir: /data/ansible
         ks: |
