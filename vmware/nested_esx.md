@@ -4,25 +4,7 @@ description: Doc to deploy nested ESX using ansible
 
 # Nested ESX
 
-Install the following in Linux
-
-{% tabs %}
-{% tab title="centos-py2" %}
-```bash
-yum install python-pip -y
-pip install ansible
-ansible-playbook -i input_spec.yml deploy.yml
-```
-{% endtab %}
-
-{% tab title="centos-py3" %}
-```
-yum install python3-pip -y
-pip3 install ansible
-ansible-playbook -i input_spec.yml deploy.yml
-```
-{% endtab %}
-{% endtabs %}
+* Download `deploy.yml` and update `input_spec.yml`
 
 {% file src="../.gitbook/assets/deploy.yml" caption="deploy.yml" %}
 
@@ -73,9 +55,28 @@ all:
           vars:
             gateway: 192.168.101.1
             vlan: 100
-
 ```
 {% endcode %}
+
+* Execute the following to deploy nested ESX
+
+{% tabs %}
+{% tab title="centos-py2" %}
+```bash
+yum install python-pip -y
+pip install ansible
+ansible-playbook -i input_spec.yml deploy.yml
+```
+{% endtab %}
+
+{% tab title="centos-py3" %}
+```
+yum install python3-pip -y
+pip3 install ansible
+ansible-playbook -i input_spec.yml deploy.yml
+```
+{% endtab %}
+{% endtabs %}
 
 
 
